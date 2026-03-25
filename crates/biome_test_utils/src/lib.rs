@@ -24,8 +24,7 @@ use biome_module_graph::{HtmlEmbeddedContent, ModuleGraph};
 use biome_package::{Manifest, PackageJson, TsConfigJson, TurboJson};
 use biome_project_layout::ProjectLayout;
 use biome_rowan::{Direction, Language, SyntaxKind, SyntaxNode, SyntaxSlot};
-use biome_service::Workspace;
-use biome_service::WorkspaceError;
+use biome_service::{Workspace, WorkspaceError};
 use biome_service::configuration::{LoadedConfiguration, load_configuration};
 use biome_service::file_handlers::DocumentFileSource;
 use biome_service::projects::Projects;
@@ -34,8 +33,7 @@ use biome_service::settings::{
 };
 use biome_service::test_utils::setup_workspace_and_open_project;
 use biome_service::workspace::{
-    FileContent, OpenFileParams, OpenProjectParams, PullDiagnosticsParams, ScanKind,
-    ScanProjectParams, UpdateSettingsParams, server,
+    PullDiagnosticsParams, ScanKind, ScanProjectParams, UpdateSettingsParams,
 };
 use biome_string_case::StrLikeExtension;
 use camino::{Utf8Path, Utf8PathBuf};
@@ -1063,20 +1061,16 @@ pub fn analyze_with_workspace(
     let fs = MemoryFileSystem::default();
     fs.insert(virtual_file_path.clone(), input_code.as_bytes());
 
-    // Insert sidecar files if they exist on disk
-    insert_sidecar_files(&fs, input_file, &project_root);
+    // Insert sidecar files if they exist on disk.
+    // Returns virtual paths of the inserted source files (CSS, JS, etc.)
+    // so we can index them for the module graph.
+    let sidecar_paths = insert_sidecar_files(&fs, input_file, &project_root);
 
-    // Create workspace
-    let workspace = server(Arc::new(fs), None);
-
-    // Open project
-    let project_result = workspace
-        .open_project(OpenProjectParams {
-            path: BiomePath::new(&project_root),
-            open_uninitialized: true,
-        })
-        .expect("failed to open project");
-    let project_key = project_result.project_key;
+    // Create workspace — use WorkspaceServer directly so we can call
+    // index_files_for_test, which opens files with OpenFileReason::Index
+    // and populates the module graph (needed by project-domain rules).
+    let (workspace, project_key) =
+        setup_workspace_and_open_project(fs, project_root.as_str());
 
     // Build configuration: enable full HTML support + merge .options.json if present
     let config = build_test_configuration(input_file);
@@ -1088,7 +1082,7 @@ pub fn analyze_with_workspace(
             configuration: config,
             workspace_directory: Some(BiomePath::new(&project_root)),
             extended_configurations: vec![],
-            module_graph_resolution_kind: ModuleGraphResolutionKind::None,
+            module_graph_resolution_kind: ModuleGraphResolutionKind::Modules,
         })
         .expect("failed to update settings");
 
@@ -1103,20 +1097,18 @@ pub fn analyze_with_workspace(
         })
         .expect("failed to scan project");
 
-    // Open file
-    workspace
-        .open_file(OpenFileParams {
-            project_key,
-            path: BiomePath::new(&virtual_file_path),
-            content: FileContent::FromClient {
-                content: input_code.clone(),
-                version: 0,
-            },
-            document_file_source: Some(document_file_source),
-            persist_node_cache: false,
-            inline_config: None,
-        })
-        .expect("failed to open file");
+    // Index all files through the internal indexing path so that:
+    // - Embedded CSS/JS blocks are parsed and stored
+    // - The module graph is populated with CSS classes and import edges
+    // This is required for project-domain rules like noUndeclaredClasses.
+    let mut all_virtual_files = sidecar_paths;
+    all_virtual_files.push(virtual_file_path.clone());
+    let files_with_sources = all_virtual_files.iter().map(|path| {
+        let biome_path = BiomePath::new(path.clone());
+        let doc_source = DocumentFileSource::from_well_known(path.as_path(), true);
+        (biome_path, doc_source)
+    });
+    workspace.index_files_for_test(project_key, files_with_sources);
 
     // Build rule selector
     let rule_selector = format!("{group}/{rule}")
@@ -1205,7 +1197,15 @@ fn build_test_configuration(input_file: &Utf8Path) -> Configuration {
 
 /// Inserts sidecar files (package.json, tsconfig.json, etc.) and peer source
 /// files into the `MemoryFileSystem` for workspace-based tests.
-fn insert_sidecar_files(fs: &MemoryFileSystem, input_file: &Utf8Path, project_root: &Utf8Path) {
+///
+/// Returns the list of virtual paths that were inserted (excluding config sidecars
+/// like package.json/tsconfig.json, which don't need indexing).
+fn insert_sidecar_files(
+    fs: &MemoryFileSystem,
+    input_file: &Utf8Path,
+    project_root: &Utf8Path,
+) -> Vec<Utf8PathBuf> {
+    let mut inserted_paths = Vec::new();
     // Insert package.json sidecar
     let package_json_sidecar = input_file.with_extension("package.json");
     if let Ok(content) = std::fs::read_to_string(&package_json_sidecar) {
@@ -1229,10 +1229,10 @@ fn insert_sidecar_files(fs: &MemoryFileSystem, input_file: &Utf8Path, project_ro
 
     // Insert additional source files from the same directory for module graph rules
     let Some(parent_dir) = input_file.parent() else {
-        return;
+        return inserted_paths;
     };
     let Ok(entries) = std::fs::read_dir(parent_dir) else {
-        return;
+        return inserted_paths;
     };
     for entry in entries.flatten() {
         let Ok(path) = Utf8PathBuf::try_from(entry.path()) else {
@@ -1252,6 +1252,7 @@ fn insert_sidecar_files(fs: &MemoryFileSystem, input_file: &Utf8Path, project_ro
                 | "mts"
                 | "cts"
                 | "tsx"
+                | "css"
                 | "vue"
                 | "svelte"
                 | "astro"
@@ -1259,7 +1260,11 @@ fn insert_sidecar_files(fs: &MemoryFileSystem, input_file: &Utf8Path, project_ro
         ) && let Ok(content) = std::fs::read_to_string(&path)
         {
             let target_name = path.file_name().unwrap();
-            fs.insert(project_root.join(target_name), content.as_bytes());
+            let virtual_path = project_root.join(target_name);
+            fs.insert(virtual_path.clone(), content.as_bytes());
+            inserted_paths.push(virtual_path);
         }
     }
+
+    inserted_paths
 }

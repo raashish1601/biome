@@ -3,10 +3,9 @@ source: crates/biome_html_analyze/tests/spec_tests.rs
 expression: valid.vue
 ---
 # Input
-```html
+```vue
+<!-- should not generate diagnostics -->
 <template>
-  <!-- should not generate diagnostics -->
-
   <!-- onmouseover paired with onfocus -->
   <div onmouseover="handleMouseOver()" onfocus="handleFocus()"></div>
 
