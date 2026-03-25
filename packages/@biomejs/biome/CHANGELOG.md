@@ -1,5 +1,33 @@
 # @biomejs/biome
 
+## 2.4.10
+
+### Patch Changes
+
+- [#8838](https://github.com/biomejs/biome/pull/8838) [`f3a6a6b`](https://github.com/biomejs/biome/commit/f3a6a6ba446aaac59119453e5becd657e509e22f) Thanks [@baeseokjae](https://github.com/baeseokjae)! - Added new lint nursery rule [`noImpliedEval`](https://biomejs.dev/linter/rules/no-implied-eval/).
+
+  The rule detects implied `eval()` usage through functions like `setTimeout`, `setInterval`, and `setImmediate` when called with string arguments.
+
+  ```js
+  // Invalid
+  setTimeout("alert('Hello');", 100);
+
+  // Valid
+  setTimeout(() => alert("Hello"), 100);
+  ```
+
+- [#9216](https://github.com/biomejs/biome/pull/9216) [`04243b0`](https://github.com/biomejs/biome/commit/04243b0535dfb65fd106f5a760ab24668786dcaf) Thanks [@FrederickStempfle](https://github.com/FrederickStempfle)! - Fixed [#9061](https://github.com/biomejs/biome/issues/9061): `noProcessEnv` now also detects `process.env` when `process` is imported from the `"process"` or `"node:process"` modules.
+
+  Previously, only the global `process` object was flagged:
+
+  ```js
+  import process from "node:process";
+  // This was not flagged, but now it is:
+  console.log(process.env.NODE_ENV);
+  ```
+
+- [#9623](https://github.com/biomejs/biome/pull/9623) [`13b3261`](https://github.com/biomejs/biome/commit/13b3261fde0748c07b1fe4f25527a4e744f4a223) Thanks [@ematipico](https://github.com/ematipico)! - Fixed [#9258](https://github.com/biomejs/biome/issues/9258): `--skip` no longer causes `suppressions/unused` warnings for suppression comments targeting skipped rules or domains.
+
 ## 2.4.9
 
 ### Patch Changes
