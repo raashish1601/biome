@@ -24,7 +24,6 @@ use biome_module_graph::{HtmlEmbeddedContent, ModuleGraph};
 use biome_package::{Manifest, PackageJson, TsConfigJson, TurboJson};
 use biome_project_layout::ProjectLayout;
 use biome_rowan::{Direction, Language, SyntaxKind, SyntaxNode, SyntaxSlot};
-use biome_service::{Workspace, WorkspaceError};
 use biome_service::configuration::{LoadedConfiguration, load_configuration};
 use biome_service::file_handlers::DocumentFileSource;
 use biome_service::projects::Projects;
@@ -35,6 +34,7 @@ use biome_service::test_utils::setup_workspace_and_open_project;
 use biome_service::workspace::{
     PullDiagnosticsParams, ScanKind, ScanProjectParams, UpdateSettingsParams,
 };
+use biome_service::{Workspace, WorkspaceError};
 use biome_string_case::StrLikeExtension;
 use camino::{Utf8Path, Utf8PathBuf};
 use json_comments::StripComments;
@@ -1069,8 +1069,7 @@ pub fn analyze_with_workspace(
     // Create workspace — use WorkspaceServer directly so we can call
     // index_files_for_test, which opens files with OpenFileReason::Index
     // and populates the module graph (needed by project-domain rules).
-    let (workspace, project_key) =
-        setup_workspace_and_open_project(fs, project_root.as_str());
+    let (workspace, project_key) = setup_workspace_and_open_project(fs, project_root.as_str());
 
     // Build configuration: enable full HTML support + merge .options.json if present
     let config = build_test_configuration(input_file);
