@@ -10,7 +10,6 @@ use biome_js_syntax::{
 };
 use biome_rowan::{
     AstNode, AstNodeExt, BatchMutationExt, Language, SyntaxTriviaPiece, declare_node_union,
-    trim_trailing_trivia_pieces,
 };
 use biome_rule_options::no_negation_else::NoNegationElseOptions;
 
@@ -130,22 +129,27 @@ impl Rule for NoNegationElse {
                 let new_colon_token = colon_token
                     .clone()
                     .with_trailing_trivia_pieces(question_mark_token.trailing_trivia().pieces());
+                let new_alternate =
+                    with_trailing_trivia_pieces(consequent, new_alternate_trailing)?;
 
                 let new_node = node
                     .clone()
                     .with_test(negated_test)
                     .with_question_mark_token(new_question_mark_token)
                     .with_consequent(with_trailing_trivia_pieces(
-                        alternate.clone(),
+                        alternate,
                         new_consequent_trailing,
                     )?)
                     .with_colon_token(new_colon_token)
-                    .with_alternate(with_trailing_trivia_pieces(
-                        consequent,
-                        new_alternate_trailing.clone(),
-                    )?)
+                    .with_alternate(new_alternate.clone())
                     .with_leading_trivia_pieces(test_leading_trivia)?
-                    .with_trailing_trivia_pieces(new_alternate_trailing)?;
+                    .with_trailing_trivia_pieces(
+                        new_alternate
+                            .syntax()
+                            .last_token()?
+                            .trailing_trivia()
+                            .pieces(),
+                    )?;
 
                 mutation.replace_node_discard_trivia(node, new_node);
             }
@@ -244,14 +248,15 @@ fn replace_negation(node: &AnyJsExpression) -> Option<AnyJsExpression> {
 }
 
 fn split_trailing_trivia<L: Language>(
-    trivia: impl ExactSizeIterator<Item = SyntaxTriviaPiece<L>> + DoubleEndedIterator,
+    trivia: impl Iterator<Item = SyntaxTriviaPiece<L>>,
 ) -> (Vec<SyntaxTriviaPiece<L>>, Vec<SyntaxTriviaPiece<L>>) {
-    let pieces: Vec<_> = trivia.collect();
-    let trimmed_len = trim_trailing_trivia_pieces(pieces.clone().into_iter()).len();
-    (
-        pieces[..trimmed_len].to_vec(),
-        pieces[trimmed_len..].to_vec(),
-    )
+    let mut pieces: Vec<_> = trivia.collect();
+    let split_index = pieces
+        .iter()
+        .rposition(|piece| !(piece.is_whitespace() || piece.is_newline()))
+        .map_or(0, |index| index + 1);
+    let suffix = pieces.split_off(split_index);
+    (pieces, suffix)
 }
 
 fn with_trailing_trivia_pieces<N>(
