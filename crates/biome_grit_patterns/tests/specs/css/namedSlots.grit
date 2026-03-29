@@ -1,0 +1,9 @@
+engine biome(1.0)
+language css
+
+or {
+  CssClassSelector(name = $name)
+  CssIdSelector(name = $name)
+  CssTypeSelector(ident = $name)
+  CssDeclaration(property = CssGenericProperty(name = $name))
+}
