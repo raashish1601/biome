@@ -1,0 +1,32 @@
+---
+source: crates/biome_js_analyze/tests/spec_tests.rs
+expression: invalid-vue-template-expression.vue
+---
+# Input
+```vue
+<!-- should generate diagnostics -->
+<script setup>
+const value = 1;
+</script>
+
+<template>
+  <div>{{ (console.log("side effect"), value) }}</div>
+</template>
+
+```
+
+# Diagnostics
+```
+invalid-vue-template-expression.vue:7:38 lint/complexity/noCommaOperator ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ! The comma operator is disallowed.
+  
+    6 │ <template>
+  > 7 │   <div>{{ (console.log("side effect"), value) }}</div>
+      │                                      ^
+    8 │ </template>
+  
+  i Its use is often confusing and obscures side effects.
+  
+
+```

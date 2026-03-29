@@ -1,7 +1,9 @@
 use biome_analyze::context::RuleContext;
 use biome_analyze::{Ast, Rule, RuleDiagnostic, RuleSource, declare_lint_rule};
 use biome_diagnostics::Severity;
-use biome_js_syntax::{JsFileSource, JsForStatement, JsSequenceExpression};
+use biome_js_syntax::{
+    JsFileSource, JsForStatement, JsInExpression, JsParenthesizedExpression, JsSequenceExpression,
+};
 use biome_rowan::AstNode;
 use biome_rule_options::no_comma_operator::NoCommaOperatorOptions;
 
@@ -67,11 +69,11 @@ impl Rule for NoCommaOperator {
             }
         }
 
-        // HACK: Skip in Vue template expressions (e.g., v-for="(item, index) in items")
-        // This is a temporary workaround until v-for expressions are parsed correctly
-        // https://github.com/biomejs/biome/issues/9075
         let file_source = ctx.source_type::<JsFileSource>();
-        if file_source.is_template_expression() && file_source.as_embedding_kind().is_vue() {
+        if file_source.is_template_expression()
+            && file_source.as_embedding_kind().is_vue()
+            && is_vue_v_for_alias(seq)
+        {
             return None;
         }
 
@@ -89,4 +91,27 @@ impl Rule for NoCommaOperator {
             .note("Its use is often confusing and obscures side effects."),
         )
     }
+}
+
+fn is_vue_v_for_alias(seq: &JsSequenceExpression) -> bool {
+    if let Some(in_expr) = seq.parent::<JsInExpression>() {
+        return in_expr
+            .property()
+            .ok()
+            .and_then(|property| property.as_any_js_expression().cloned())
+            .is_some_and(|property| property.syntax() == seq.syntax());
+    }
+
+    let Some(parenthesized) = seq.parent::<JsParenthesizedExpression>() else {
+        return false;
+    };
+    let Some(in_expr) = parenthesized.parent::<JsInExpression>() else {
+        return false;
+    };
+
+    in_expr
+        .property()
+        .ok()
+        .and_then(|property| property.as_any_js_expression().cloned())
+        .is_some_and(|property| property.syntax() == parenthesized.syntax())
 }
