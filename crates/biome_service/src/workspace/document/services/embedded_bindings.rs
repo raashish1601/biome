@@ -1,5 +1,6 @@
 use biome_js_syntax::{
-    AnyJsArrayBindingPatternElement, AnyJsBindingPattern, AnyJsExpression, AnyJsModuleItem,
+    AnyJsArrayBindingPatternElement, AnyJsBindingPattern, AnyJsDeclarationClause,
+    AnyJsExportClause, AnyJsExportDefaultDeclaration, AnyJsExpression, AnyJsModuleItem,
     AnyJsObjectBindingPatternMember, AnyJsObjectMember, AnyJsRoot, AnyJsStatement,
     AnyTsIdentifierBinding, AnyTsType, JsCallExpression, JsExport, JsImport, JsModuleItemList,
     JsVariableStatement,
@@ -144,6 +145,110 @@ impl EmbeddedBuilder {
         // would be preferable since they could help reduce the duplicated logic for this.
 
         let clause = export.export_clause().ok()?;
+
+        match &clause {
+            AnyJsExportClause::AnyJsDeclarationClause(declaration_clause) => {
+                match declaration_clause {
+                    AnyJsDeclarationClause::JsFunctionDeclaration(decl) => {
+                        self.register_js_binding(decl.id());
+                    }
+                    AnyJsDeclarationClause::JsClassDeclaration(decl) => {
+                        self.register_js_binding(decl.id());
+                    }
+                    AnyJsDeclarationClause::JsVariableDeclarationClause(decl) => {
+                        let declaration = decl.declaration().ok()?;
+                        for declarator in declaration.declarators().iter().flatten() {
+                            if let Some(initializer) = declarator.initializer()
+                                && let Ok(AnyJsExpression::JsCallExpression(call)) =
+                                    initializer.expression()
+                            {
+                                self.visit_define_props_call(&call);
+                            }
+
+                            let id = declarator.id().ok()?;
+
+                            match id {
+                                AnyJsBindingPattern::AnyJsBinding(binding) => {
+                                    let identifier = binding.as_js_identifier_binding()?;
+                                    let token = identifier.name_token().ok()?;
+                                    self.js_bindings.insert(
+                                        token.text_trimmed_range(),
+                                        token.token_text_trimmed(),
+                                    );
+                                }
+                                AnyJsBindingPattern::JsArrayBindingPattern(
+                                    array_binding_pattern,
+                                ) => {
+                                    for element in array_binding_pattern.elements().iter().flatten()
+                                    {
+                                        match element {
+                                            AnyJsArrayBindingPatternElement::JsArrayBindingPatternElement(
+                                                element,
+                                            ) => {
+                                                self.visit_any_js_binding_pattern(
+                                                    VecDeque::from([element.pattern().ok()?]),
+                                                )?;
+                                            }
+                                            AnyJsArrayBindingPatternElement::JsArrayBindingPatternRestElement(
+                                                rest,
+                                            ) => {
+                                                self.visit_any_js_binding_pattern(
+                                                    VecDeque::from([rest.pattern().ok()?]),
+                                                )?;
+                                            }
+                                            AnyJsArrayBindingPatternElement::JsArrayHole(_) => {}
+                                        }
+                                    }
+                                }
+                                AnyJsBindingPattern::JsObjectBindingPattern(
+                                    object_binding_pattern,
+                                ) => {
+                                    for property in
+                                        object_binding_pattern.properties().iter().flatten()
+                                    {
+                                        self.visit_object_binding_pattern_member(property)?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    AnyJsDeclarationClause::TsEnumDeclaration(decl) => {
+                        self.register_js_binding(decl.id());
+                    }
+                    AnyJsDeclarationClause::TsInterfaceDeclaration(decl) => {
+                        self.register_ts_identifier_binding(decl.id());
+                    }
+                    AnyJsDeclarationClause::TsTypeAliasDeclaration(decl) => {
+                        self.register_ts_identifier_binding(decl.binding_identifier());
+                    }
+                    AnyJsDeclarationClause::TsDeclareFunctionDeclaration(decl) => {
+                        self.register_js_binding(decl.id());
+                    }
+                    _ => {}
+                }
+
+                return Some(());
+            }
+            AnyJsExportClause::JsExportDefaultDeclarationClause(default_declaration_clause) => {
+                match default_declaration_clause.declaration().ok()? {
+                    AnyJsExportDefaultDeclaration::JsFunctionExportDefaultDeclaration(decl) => {
+                        self.register_js_binding(decl.id());
+                    }
+                    AnyJsExportDefaultDeclaration::JsClassExportDefaultDeclaration(decl) => {
+                        self.register_js_binding(decl.id());
+                    }
+                    AnyJsExportDefaultDeclaration::TsDeclareFunctionExportDefaultDeclaration(
+                        decl,
+                    ) => {
+                        self.register_js_binding(decl.id());
+                    }
+                }
+
+                return Some(());
+            }
+            AnyJsExportClause::JsExportDefaultExpressionClause(_) => {}
+            _ => return Some(()),
+        }
 
         // Only handle `export default { ... }` patterns
         let default_clause = clause.as_js_export_default_expression_clause()?;
@@ -596,6 +701,34 @@ enum Direction { Up, Down }
         assert!(contains_binding(&service, "UserId"));
         assert!(contains_binding(&service, "UserProfile"));
         assert!(contains_binding(&service, "Direction"));
+    }
+
+    #[test]
+    fn tracks_exported_declarations() {
+        let source = r#"
+export const load = async () => {};
+export function entries() {}
+export class Loader {}
+export enum Direction { Up, Down }
+export interface PageData {}
+export type Params = { slug: string };
+export declare function prerender(): boolean;
+export default function setup() {}
+export default class RouteLoader {}
+"#;
+        let mut service = EmbeddedExportedBindings::default();
+        let mut builder = service.builder();
+        visit_js_root(&mut builder, &parse_js(source));
+        service.finish(builder);
+        assert!(contains_binding(&service, "load"));
+        assert!(contains_binding(&service, "entries"));
+        assert!(contains_binding(&service, "Loader"));
+        assert!(contains_binding(&service, "Direction"));
+        assert!(contains_binding(&service, "PageData"));
+        assert!(contains_binding(&service, "Params"));
+        assert!(contains_binding(&service, "prerender"));
+        assert!(contains_binding(&service, "setup"));
+        assert!(contains_binding(&service, "RouteLoader"));
     }
 
     #[test]
