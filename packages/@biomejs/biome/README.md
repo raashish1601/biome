@@ -66,6 +66,8 @@ npx @biomejs/biome check --write
 npx @biomejs/biome ci
 ```
 
+If your machine also has a global `biome` binary, invoking `biome` directly can still run that global version instead of the one installed in your project. To make sure you use the project-local version, run Biome through your package manager (`npx @biomejs/biome`, `npm exec biome`, `pnpm exec biome`, or `bunx @biomejs/biome`) or through a `package.json` script.
+
 If you want to give Biome a run without installing it, use the [online playground](https://biomejs.dev/playground/), compiled to WebAssembly.
 
 ## Documentation
