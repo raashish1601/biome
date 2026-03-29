@@ -6,8 +6,9 @@ use biome_diagnostics::Severity;
 use biome_js_semantic::{Binding, SemanticModel};
 use biome_js_syntax::{
     JsClassExpression, JsFormalParameter, JsFunctionExpression, JsIdentifierBinding,
-    JsParameterList, JsRestParameter, TsIdentifierBinding, TsPropertySignatureTypeMember,
-    TsTypeParameter, TsTypeParameterName, binding_ext::AnyJsBindingDeclaration,
+    JsParameterList, JsRestParameter, TsIdentifierBinding, TsIndexSignatureClassMember,
+    TsIndexSignatureParameter, TsPropertyParameter, TsPropertySignatureTypeMember, TsTypeParameter,
+    TsTypeParameterName, binding_ext::AnyJsBindingDeclaration,
     binding_ext::AnyJsParameterParentFunction,
 };
 use biome_rowan::{AstNode, SyntaxNodeCast, TokenText, declare_node_union};
@@ -185,6 +186,8 @@ fn evaluate_shadowing(model: &SemanticModel, binding: &Binding, upper_binding: &
         && (is_inside_type_parameter(binding) || is_inside_type_member(binding))
     {
         return false;
+    } else if is_unused_type_only_function_parameter(binding) {
+        return false;
     }
     true
 }
@@ -296,17 +299,8 @@ fn is_inside_function_parameters(binding: &Binding) -> bool {
 /// body). These parameters are type-only and should not be considered as
 /// shadowing outer variables.
 fn is_in_overload_signature(binding: &Binding) -> bool {
-    let node = binding.syntax();
-    let parent_function = node.clone().cast::<JsIdentifierBinding>().and_then(|id| {
-        id.parent::<JsFormalParameter>()
-            .and_then(|p| p.parent_function())
-            .or_else(|| {
-                id.parent::<JsRestParameter>()
-                    .and_then(|p| p.parent_function())
-            })
-    });
     matches!(
-        parent_function,
+        parameter_parent_function(binding),
         Some(
             AnyJsParameterParentFunction::TsConstructorSignatureClassMember(_)
                 | AnyJsParameterParentFunction::TsMethodSignatureClassMember(_)
@@ -315,4 +309,53 @@ fn is_in_overload_signature(binding: &Binding) -> bool {
                 | AnyJsParameterParentFunction::TsDeclareFunctionExportDefaultDeclaration(_)
         )
     )
+}
+
+fn is_unused_type_only_function_parameter(binding: &Binding) -> bool {
+    is_in_type_only_function_signature(binding) && binding.all_references().next().is_none()
+}
+
+fn is_in_type_only_function_signature(binding: &Binding) -> bool {
+    matches!(
+        parameter_parent_function(binding),
+        Some(
+            AnyJsParameterParentFunction::TsFunctionType(_)
+                | AnyJsParameterParentFunction::TsConstructorType(_)
+                | AnyJsParameterParentFunction::TsConstructorSignatureClassMember(_)
+                | AnyJsParameterParentFunction::TsMethodSignatureClassMember(_)
+                | AnyJsParameterParentFunction::TsSetterSignatureClassMember(_)
+                | AnyJsParameterParentFunction::TsIndexSignatureClassMember(_)
+                | AnyJsParameterParentFunction::TsConstructSignatureTypeMember(_)
+                | AnyJsParameterParentFunction::TsMethodSignatureTypeMember(_)
+                | AnyJsParameterParentFunction::TsSetterSignatureTypeMember(_)
+                | AnyJsParameterParentFunction::TsCallSignatureTypeMember(_)
+        )
+    )
+}
+
+fn parameter_parent_function(binding: &Binding) -> Option<AnyJsParameterParentFunction> {
+    binding.syntax().ancestors().skip(1).find_map(|ancestor| {
+        ancestor
+            .cast::<JsFormalParameter>()
+            .and_then(|parameter| parameter.parent_function())
+            .or_else(|| {
+                ancestor
+                    .cast::<JsRestParameter>()
+                    .and_then(|parameter| parameter.parent_function())
+            })
+            .or_else(|| {
+                ancestor
+                    .cast::<TsPropertyParameter>()
+                    .and_then(|parameter| parameter.parent_function())
+            })
+            .or_else(|| {
+                ancestor
+                    .cast::<TsIndexSignatureParameter>()
+                    .and_then(|parameter| {
+                        parameter
+                            .parent::<TsIndexSignatureClassMember>()
+                            .map(AnyJsParameterParentFunction::TsIndexSignatureClassMember)
+                    })
+            })
+    })
 }
