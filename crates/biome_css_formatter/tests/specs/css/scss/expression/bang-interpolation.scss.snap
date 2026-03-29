@@ -1,0 +1,25 @@
+---
+source: crates/biome_formatter_test/src/snapshot_builder.rs
+info: css/scss/expression/bang-interpolation.scss
+---
+
+# Input
+
+```scss
+.button{
+color:red !#{$flag};
+background:linear-gradient(#{$from},#{$to}) !#{$importantFlag};
+}
+
+```
+
+
+# Formatted
+
+```scss
+.button {
+	color: red !#{$flag};
+	background: linear-gradient(#{$from}, #{$to}) !#{$importantFlag};
+}
+
+```

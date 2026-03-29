@@ -1,0 +1,4 @@
+.button{
+color:red !#{$flag};
+background:linear-gradient(#{$from},#{$to}) !#{$importantFlag};
+}
