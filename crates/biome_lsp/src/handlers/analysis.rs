@@ -42,6 +42,17 @@ fn fix_all_kind() -> CodeActionKind {
     }
 }
 
+fn organize_imports_kind() -> CodeActionKind {
+    match ORGANIZE_IMPORTS_CATEGORY.to_str() {
+        Cow::Borrowed(kind) => CodeActionKind::from(kind),
+        Cow::Owned(kind) => CodeActionKind::from(kind),
+    }
+}
+
+fn should_use_fix_file_for_organize_imports(path: &BiomePath) -> bool {
+    matches!(path.as_path().extension(), Some("astro" | "svelte" | "vue"))
+}
+
 /// Queries the [`AnalysisServer`] for code actions of the file matching its path
 ///
 /// If the AnalysisServer has no matching file, results in error.
@@ -234,6 +245,37 @@ pub(crate) fn code_actions(
         None
     };
 
+    let embedded_organize_imports = if should_use_fix_file_for_organize_imports(&path)
+        && result
+            .actions
+            .iter()
+            .any(|action| action.category.matches("source.organizeImports.biome"))
+    {
+        if supports_resolve {
+            Some(CodeActionOrCommand::CodeAction(lsp::CodeAction {
+                title: String::from("Organize Imports (Biome)"),
+                kind: Some(organize_imports_kind()),
+                diagnostics: None,
+                edit: None,
+                command: None,
+                is_preferred: Some(true),
+                disabled: None,
+                data: serde_json::to_value(CodeActionResolveData {
+                    url: url.to_string(),
+                    rule: None,
+                    kind: CodeActionResolveKind::OrganizeImports,
+                    range: cursor_range,
+                    project_key: doc.project_key,
+                })
+                .ok(),
+            }))
+        } else {
+            organize_imports(session, &url, path.clone(), &doc.line_index)?
+        }
+    } else {
+        None
+    };
+
     let mut has_fixes = false;
 
     debug!("Actions: {:?}", &result.actions.len());
@@ -247,6 +289,12 @@ pub(crate) fn code_actions(
                 &action.category,
                 action.suggestion.as_ref().map(|s| &s.applicability)
             );
+
+            if action.category.matches("source.organizeImports.biome")
+                && should_use_fix_file_for_organize_imports(&path)
+            {
+                return None;
+            }
 
             // Filter out source.organizeImports.biome action when assist is not supported.
             if action.category.matches("source.organizeImports.biome")
@@ -325,6 +373,7 @@ pub(crate) fn code_actions(
             Some(CodeActionOrCommand::CodeAction(lsp_action))
         })
         .chain(fix_all)
+        .chain(embedded_organize_imports)
         .collect();
 
     // If any actions is marked as fixing a diagnostic, hide other actions
@@ -359,6 +408,7 @@ pub(crate) enum CodeActionResolveKind {
     RuleFix,
     InlineSuppression,
     TopLevelSuppression,
+    OrganizeImports,
     FixAll,
 }
 
@@ -423,6 +473,15 @@ pub(crate) fn code_action_resolve(
         return Ok(resolved);
     }
 
+    if matches!(resolve_data.kind, CodeActionResolveKind::OrganizeImports) {
+        let result = organize_imports(session, &url, path.clone(), &doc.line_index);
+        let mut resolved = params;
+        if let Ok(Some(CodeActionOrCommand::CodeAction(organize_imports_action))) = result {
+            resolved.edit = organize_imports_action.edit;
+        }
+        return Ok(resolved);
+    }
+
     // TODO: handle this error in a better way
     let rule_selector =
         AnalyzerSelector::Rule(resolve_data.rule.context("The rule doesn't exist")?);
@@ -458,6 +517,7 @@ pub(crate) fn code_action_resolve(
             CodeActionResolveKind::TopLevelSuppression => action
                 .category
                 .matches(SUPPRESSION_TOP_LEVEL_ACTION_CATEGORY),
+            CodeActionResolveKind::OrganizeImports => false,
             CodeActionResolveKind::FixAll => false,
         };
         category_matches && action.suggestion.is_some()
@@ -695,6 +755,125 @@ fn fix_all(
         kind: Some(fix_all_kind()),
         diagnostics: Some(diagnostics),
         edit: Some(edit),
+        command: None,
+        is_preferred: Some(true),
+        disabled: None,
+        data: None,
+    })))
+}
+
+#[tracing::instrument(level = "debug", skip(session, url, line_index))]
+fn organize_imports(
+    session: &Session,
+    url: &Uri,
+    path: BiomePath,
+    line_index: &LineIndex,
+) -> Result<Option<CodeActionOrCommand>, Error> {
+    let Some(doc) = session.document(url) else {
+        return Ok(None);
+    };
+    let analyzer_features = FeaturesBuilder::new().with_assist().build();
+
+    if !session.workspace.file_exists(path.clone().into())? {
+        return Ok(None);
+    }
+
+    if session.workspace.is_path_ignored(PathIsIgnoredParams {
+        path: path.clone(),
+        is_dir: false,
+        project_key: doc.project_key,
+        features: analyzer_features,
+        ignore_kind: IgnoreKind::Ancestors,
+    })? {
+        return Ok(None);
+    }
+
+    let FileFeaturesResult {
+        features_supported: file_features,
+    } = session.workspace.file_features(SupportsFeatureParams {
+        project_key: doc.project_key,
+        path: path.clone(),
+        features: FeaturesBuilder::new()
+            .with_formatter()
+            .with_assist()
+            .build(),
+        inline_config: session.inline_config(),
+        skip_ignore_check: false,
+        not_requested_features: FeaturesBuilder::new().with_search().build(),
+    })?;
+    if !file_features.supports_assist() {
+        return Ok(None);
+    }
+    let should_format = file_features.supports_format();
+
+    let size_limit_result = session.workspace.check_file_size(CheckFileSizeParams {
+        project_key: doc.project_key,
+        path: path.clone(),
+    })?;
+    if size_limit_result.is_too_large() {
+        return Ok(None);
+    }
+
+    let fixed = session.workspace.fix_file(FixFileParams {
+        project_key: doc.project_key,
+        path: path.clone(),
+        fix_file_mode: FixFileMode::SafeFixes,
+        should_format,
+        only: vec![AnalyzerSelector::Rule(RuleSelector::Rule(
+            "source",
+            "organizeImports",
+        ))],
+        skip: vec![],
+        enabled_rules: vec![],
+        suppression_reason: None,
+        rule_categories: RuleCategoriesBuilder::default().with_assist().build(),
+        inline_config: session.inline_config(),
+    })?;
+    if fixed.actions.is_empty() {
+        return Ok(None);
+    }
+
+    let output = if file_features.supports_full_html_support() {
+        fixed.code
+    } else {
+        match path.as_path().extension() {
+            Some(extension) => {
+                let input = session.workspace.get_file_content(GetFileContentParams {
+                    project_key: doc.project_key,
+                    path: path.clone(),
+                })?;
+                match extension {
+                    "astro" => AstroFileHandler::output(input.as_str(), fixed.code.as_str()),
+                    "vue" => VueFileHandler::output(input.as_str(), fixed.code.as_str()),
+                    "svelte" => SvelteFileHandler::output(input.as_str(), fixed.code.as_str()),
+                    _ => fixed.code,
+                }
+            }
+            _ => fixed.code,
+        }
+    };
+
+    let mut changes = HashMap::new();
+    changes.insert(
+        url.clone(),
+        vec![lsp::TextEdit {
+            range: lsp::Range {
+                start: lsp::Position::new(0, 0),
+                end: lsp::Position::new(line_index.len(), 0),
+            },
+            new_text: output,
+        }],
+    );
+
+    Ok(Some(CodeActionOrCommand::CodeAction(lsp::CodeAction {
+        title: String::from("Organize Imports (Biome)"),
+        kind: Some(organize_imports_kind()),
+        diagnostics: None,
+        edit: Some(lsp::WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }),
         command: None,
         is_preferred: Some(true),
         disabled: None,

@@ -2388,6 +2388,114 @@ if(a === -0) {}
 }
 
 #[tokio::test]
+async fn pull_organize_imports_for_svelte_preserves_embedded_indentation() -> Result<()> {
+    let fs = MemoryFileSystem::default();
+    let config = r#"{
+    "formatter": {
+        "indentStyle": "space",
+        "indentWidth": 2
+    },
+    "html": {
+        "formatter": {
+            "indentScriptAndStyle": true
+        }
+    }
+}"#;
+    fs.insert(to_utf8_file_path_buf(uri!("biome.json")), config);
+
+    let factory = ServerFactory::new_with_fs(Arc::new(fs));
+    let (service, client) = factory.create().into_inner();
+    let (stream, sink) = client.split();
+    let mut server = Server::new(service);
+
+    let (sender, _) = channel(CHANNEL_BUFFER_SIZE);
+    let reader = tokio::spawn(client_handler(stream, sink, sender));
+
+    server.initialize().await?;
+    server.initialized().await?;
+    server
+        .open_named_document(config, uri!("biome.json"), "json")
+        .await?;
+    server.load_configuration().await?;
+
+    let svelte_file = r#"<script lang="ts">
+  import { Content, List, Tabs, Trigger } from "@/shadcn-svelte/tabs";
+  import { tabs } from "slidytabs";
+</script>
+<div></div>
+"#;
+    server
+        .open_named_document(svelte_file, uri!("file.svelte"), "svelte")
+        .await?;
+
+    let res: CodeActionResponse = server
+        .request(
+            "textDocument/codeAction",
+            "pull_code_actions",
+            CodeActionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: uri!("file.svelte"),
+                },
+                range: Range {
+                    start: Position {
+                        line: 1,
+                        character: 2,
+                    },
+                    end: Position {
+                        line: 2,
+                        character: 25,
+                    },
+                },
+                context: CodeActionContext {
+                    diagnostics: vec![],
+                    only: Some(vec![CodeActionKind::new("source.organizeImports")]),
+                    ..Default::default()
+                },
+                work_done_progress_params: WorkDoneProgressParams {
+                    work_done_token: None,
+                },
+                partial_result_params: PartialResultParams {
+                    partial_result_token: None,
+                },
+            },
+        )
+        .await?
+        .context("codeAction returned None")?;
+
+    assert_eq!(res.len(), 1);
+
+    let CodeActionOrCommand::CodeAction(action) = &res[0] else {
+        panic!("expected CodeAction");
+    };
+    assert_eq!(
+        action.kind,
+        Some(CodeActionKind::new("source.organizeImports.biome"))
+    );
+
+    let edit = action.edit.as_ref().context("expected edit")?;
+    let changes = edit.changes.as_ref().context("expected changes")?;
+    let edits = changes
+        .get(&uri!("file.svelte"))
+        .context("expected edits for file.svelte")?;
+    assert_eq!(edits.len(), 1);
+    assert_eq!(
+        edits[0].new_text,
+        r#"<script lang="ts">
+  import { tabs } from "slidytabs";
+  import { Content, List, Tabs, Trigger } from "@/shadcn-svelte/tabs";
+</script>
+<div></div>
+"#
+    );
+
+    server.close_document().await?;
+    server.shutdown().await?;
+    reader.abort();
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn does_not_pull_action_for_disabled_rule_in_override_issue_2782() -> Result<()> {
     let fs = MemoryFileSystem::default();
     let config = r#"{
