@@ -21,7 +21,10 @@ use crate::workspace::{DocumentFileSource, EmbeddedSnippet, PullDiagnosticsAndAc
 use crate::{
     WorkspaceError,
     settings::{FormatSettings, LanguageListSettings, LanguageSettings, ServiceLanguage},
-    workspace::{CodeAction, FixFileResult, GetSyntaxTreeResult, PullActionsResult, RenameResult},
+    workspace::{
+        CodeAction, FixFileResult, GetDefinitionResult, GetSyntaxTreeResult, PullActionsResult,
+        RenameResult,
+    },
 };
 use biome_analyze::ActionFilter;
 use biome_analyze::options::{PreferredIndentation, PreferredQuote};
@@ -55,15 +58,16 @@ use biome_js_formatter::context::{
 };
 use biome_js_formatter::format_node;
 use biome_js_parser::JsParserOptions;
-use biome_js_semantic::{SemanticModelOptions, semantic_model};
+use biome_js_semantic::{Binding, SemanticModelOptions, semantic_model};
 use biome_js_syntax::{
     AnyJsExpression, AnyJsRoot, AnyJsTemplateElement, JsCallArgumentList, JsCallArguments,
     JsCallExpression, JsClassDeclaration, JsClassExpression, JsFileSource, JsFunctionDeclaration,
-    JsLanguage, JsSyntaxNode, JsTemplateChunkElement, JsTemplateExpression, JsVariableDeclarator,
-    TextRange, TextSize, TokenAtOffset,
+    JsIdentifierAssignment, JsLanguage, JsReferenceIdentifier, JsSyntaxKind, JsSyntaxNode,
+    JsTemplateChunkElement, JsTemplateExpression, JsVariableDeclarator, JsxReferenceIdentifier,
+    TextRange, TextSize, TokenAtOffset, binding_ext::AnyJsIdentifierBinding,
 };
-use biome_js_type_info::{GlobalsResolver, ScopeId, TypeData, TypeResolver};
-use biome_module_graph::ModuleGraph;
+use biome_js_type_info::{GlobalsResolver, ImportSymbol, ScopeId, TypeData, TypeResolver};
+use biome_module_graph::{JsOwnExport, ModuleGraph};
 use biome_parser::AnyParse;
 use biome_rowan::{
     AstNode, AstNodeList, BatchMutation, BatchMutationExt, Direction, NodeCache, SendNode,
@@ -528,6 +532,7 @@ impl ExtensionHandler for JsFileHandler {
                 code_actions: Some(code_actions),
                 fix_all: Some(fix_all),
                 rename: Some(rename),
+                get_definition: Some(get_definition),
                 update_snippets: Some(update_snippets),
                 pull_diagnostics_and_actions: Some(pull_diagnostics_and_actions),
             },
@@ -1400,6 +1405,89 @@ pub(crate) fn pull_diagnostics_and_actions(
     );
 
     process_pull_diagnostics_and_actions.finish()
+}
+
+fn binding_for_definition(
+    model: &biome_js_semantic::SemanticModel,
+    node: &JsSyntaxNode,
+) -> Option<Binding> {
+    match node.kind() {
+        JsSyntaxKind::JS_IDENTIFIER_BINDING | JsSyntaxKind::TS_IDENTIFIER_BINDING => {
+            AnyJsIdentifierBinding::cast(node.clone()).map(|binding| model.as_binding(&binding))
+        }
+        JsSyntaxKind::JS_REFERENCE_IDENTIFIER => JsReferenceIdentifier::cast(node.clone())
+            .and_then(|reference| model.binding(&reference)),
+        JsSyntaxKind::JS_IDENTIFIER_ASSIGNMENT => JsIdentifierAssignment::cast(node.clone())
+            .and_then(|assignment| model.binding(&assignment)),
+        JsSyntaxKind::JSX_REFERENCE_IDENTIFIER => JsxReferenceIdentifier::cast(node.clone())
+            .and_then(|reference| model.binding(&reference)),
+        _ => None,
+    }
+}
+
+fn resolve_imported_definition(
+    path: &BiomePath,
+    module_graph: &ModuleGraph,
+    binding: &Binding,
+) -> Option<GetDefinitionResult> {
+    let current_module = module_graph.js_module_info_for_path(path.as_path())?;
+    let binding_name = binding.syntax().text_trimmed().to_string();
+    let import = current_module.static_imports.get(binding_name.as_str())?;
+    let export_name = match &import.symbol {
+        ImportSymbol::Default => "default",
+        ImportSymbol::Named(name) => name.text(),
+        ImportSymbol::All => return None,
+    };
+    let resolved_path = import.resolved_path.as_deref().ok()?;
+    let (path, export) = module_graph.find_exported_symbol_source(resolved_path, export_name)?;
+
+    match export {
+        JsOwnExport::Binding(range) => Some(GetDefinitionResult {
+            path: path.into(),
+            range,
+        }),
+        JsOwnExport::Type(_) | JsOwnExport::Namespace(_) => None,
+    }
+}
+
+fn get_definition(
+    path: &BiomePath,
+    parse: AnyParse,
+    symbol_at: TextSize,
+    module_graph: Arc<ModuleGraph>,
+) -> Result<Option<GetDefinitionResult>, WorkspaceError> {
+    let root = parse.tree();
+    let model = semantic_model(&root, SemanticModelOptions::default());
+    let token = match parse.syntax().token_at_offset(symbol_at) {
+        TokenAtOffset::None => return Ok(None),
+        TokenAtOffset::Single(token) => token,
+        TokenAtOffset::Between(left, right) => {
+            let use_left = left
+                .parent()
+                .as_ref()
+                .is_some_and(|node| binding_for_definition(&model, node).is_some());
+            if use_left { left } else { right }
+        }
+    };
+    let Some(node) = token.parent() else {
+        return Ok(None);
+    };
+    let Some(binding) = binding_for_definition(&model, &node) else {
+        return Ok(None);
+    };
+
+    if binding.is_imported() {
+        return Ok(resolve_imported_definition(
+            path,
+            module_graph.as_ref(),
+            &binding,
+        ));
+    }
+
+    Ok(Some(GetDefinitionResult {
+        path: path.clone(),
+        range: binding.syntax().text_trimmed_range(),
+    }))
 }
 
 fn rename(

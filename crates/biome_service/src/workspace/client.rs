@@ -1,12 +1,13 @@
 use super::{
     ChangeFileParams, ChangeFileResult, CloseFileParams, FileExitsParams, FixFileParams,
     FixFileResult, FormatFileParams, FormatOnTypeParams, FormatRangeParams,
-    GetControlFlowGraphParams, GetFormatterIRParams, GetModuleGraphParams, GetModuleGraphResult,
-    GetSemanticModelParams, GetSyntaxTreeParams, GetSyntaxTreeResult, OpenFileParams,
-    OpenFileResult, PullActionsParams, PullActionsResult, PullDiagnosticsAndActionsParams,
-    PullDiagnosticsAndActionsResult, PullDiagnosticsParams, PullDiagnosticsResult, RenameParams,
-    RenameResult, ScanProjectParams, ScanProjectResult, SearchPatternParams, SearchResults,
-    SupportsFeatureParams, UpdateModuleGraphParams, UpdateSettingsParams, UpdateSettingsResult,
+    GetControlFlowGraphParams, GetDefinitionParams, GetDefinitionResult, GetFormatterIRParams,
+    GetModuleGraphParams, GetModuleGraphResult, GetSemanticModelParams, GetSyntaxTreeParams,
+    GetSyntaxTreeResult, OpenFileParams, OpenFileResult, PullActionsParams, PullActionsResult,
+    PullDiagnosticsAndActionsParams, PullDiagnosticsAndActionsResult, PullDiagnosticsParams,
+    PullDiagnosticsResult, RenameParams, RenameResult, ScanProjectParams, ScanProjectResult,
+    SearchPatternParams, SearchResults, SupportsFeatureParams, UpdateModuleGraphParams,
+    UpdateSettingsParams, UpdateSettingsResult,
 };
 use crate::workspace::{
     CheckFileSizeParams, CheckFileSizeResult, CloseProjectParams, FileFeaturesResult,
@@ -197,6 +198,13 @@ where
 
     fn rename(&self, params: RenameParams) -> Result<RenameResult, WorkspaceError> {
         self.request("biome/rename", params)
+    }
+
+    fn get_definition(
+        &self,
+        params: GetDefinitionParams,
+    ) -> Result<Option<GetDefinitionResult>, WorkspaceError> {
+        self.request("biome/get_definition", params)
     }
 
     fn close_file(&self, params: CloseFileParams) -> Result<(), WorkspaceError> {

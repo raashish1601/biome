@@ -360,6 +360,7 @@ impl ExtensionHandler for HtmlFileHandler {
                 lint: Some(lint),
                 code_actions: Some(code_actions),
                 rename: None,
+                get_definition: None,
                 fix_all: Some(fix_all),
                 update_snippets: Some(update_snippets),
                 pull_diagnostics_and_actions: None,

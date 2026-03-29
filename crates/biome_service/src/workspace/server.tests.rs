@@ -2,12 +2,12 @@ use super::*;
 use crate::settings::ModuleGraphResolutionKind;
 use crate::test_utils::setup_workspace_and_open_project;
 use biome_configuration::{
-    FormatterConfiguration, JsConfiguration,
+    Configuration, FormatterConfiguration, JsConfiguration,
     javascript::{JsFormatterConfiguration, JsParserConfiguration},
 };
 use biome_formatter::{IndentStyle, LineWidth};
 use biome_fs::MemoryFileSystem;
-use biome_rowan::TextSize;
+use biome_rowan::{TextRange, TextSize};
 
 #[test]
 fn commonjs_file_rejects_import_statement() {
@@ -853,4 +853,113 @@ const highlight = foo`some tagged template` // unknown tagged template
         .unwrap();
 
     insta::assert_snapshot!(result.as_code());
+}
+
+#[test]
+fn get_definition_returns_local_binding_location() {
+    const FILE_PATH: &str = "/project/file.js";
+    const FILE_CONTENT: &str = "const foo = 1;\nconsole.log(foo);\n";
+
+    let fs = MemoryFileSystem::default();
+    fs.insert(Utf8PathBuf::from(FILE_PATH), FILE_CONTENT);
+
+    let (workspace, project_key) = setup_workspace_and_open_project(fs, "/");
+
+    workspace
+        .open_file(OpenFileParams {
+            project_key,
+            path: BiomePath::new(FILE_PATH),
+            content: FileContent::FromServer,
+            document_file_source: None,
+            persist_node_cache: false,
+            inline_config: None,
+        })
+        .unwrap();
+
+    let definition_start = FILE_CONTENT.find("foo").unwrap() as u32;
+    let symbol_at = TextSize::from((FILE_CONTENT.rfind("foo").unwrap() + 1) as u32);
+    let result = workspace
+        .get_definition(GetDefinitionParams {
+            project_key,
+            path: BiomePath::new(FILE_PATH),
+            symbol_at,
+        })
+        .unwrap();
+
+    assert_eq!(
+        result,
+        Some(GetDefinitionResult {
+            path: BiomePath::new(FILE_PATH),
+            range: TextRange::new(
+                TextSize::from(definition_start),
+                TextSize::from(definition_start + 3),
+            ),
+        })
+    );
+}
+
+#[test]
+fn get_definition_resolves_static_imported_binding() {
+    const ENTRY_PATH: &str = "/project/index.js";
+    const ENTRY_CONTENT: &str = "import { foo } from './dep.js';\nconsole.log(foo);\n";
+    const DEP_PATH: &str = "/project/dep.js";
+    const DEP_CONTENT: &str = "export function foo() {}\n";
+
+    let fs = MemoryFileSystem::default();
+    fs.insert(Utf8PathBuf::from(ENTRY_PATH), ENTRY_CONTENT);
+    fs.insert(Utf8PathBuf::from(DEP_PATH), DEP_CONTENT);
+
+    let (workspace, project_key) = setup_workspace_and_open_project(fs, "/project");
+
+    workspace
+        .update_settings(UpdateSettingsParams {
+            project_key,
+            workspace_directory: Some(BiomePath::new("/project")),
+            configuration: Configuration::default(),
+            extended_configurations: Default::default(),
+            module_graph_resolution_kind: ModuleGraphResolutionKind::Modules,
+        })
+        .unwrap();
+
+    workspace
+        .scan_project(ScanProjectParams {
+            project_key,
+            watch: false,
+            force: false,
+            scan_kind: ScanKind::Project,
+            verbose: false,
+        })
+        .unwrap();
+
+    workspace
+        .open_file(OpenFileParams {
+            project_key,
+            path: BiomePath::new(ENTRY_PATH),
+            content: FileContent::FromServer,
+            document_file_source: None,
+            persist_node_cache: false,
+            inline_config: None,
+        })
+        .unwrap();
+
+    let definition_start = DEP_CONTENT.find("foo").unwrap() as u32;
+    let symbol_at = TextSize::from((ENTRY_CONTENT.rfind("foo").unwrap() + 1) as u32);
+    let result = workspace
+        .get_definition(GetDefinitionParams {
+            project_key,
+            path: BiomePath::new(ENTRY_PATH),
+            symbol_at,
+        })
+        .unwrap();
+
+    assert_eq!(
+        result,
+        Some(GetDefinitionResult {
+            path: BiomePath::new(DEP_PATH),
+            range: TextRange::new(
+                TextSize::from(definition_start),
+                TextSize::from(definition_start + 3),
+            ),
+        })
+    );
 }

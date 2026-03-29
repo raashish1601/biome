@@ -239,6 +239,24 @@ impl ModuleGraph {
             .map(|(_, export)| export.clone())
     }
 
+    /// Finds an exported symbol by `symbol_name` starting from `module_path`.
+    ///
+    /// Follows re-exports if necessary and returns the file that owns the final
+    /// exported symbol.
+    pub fn find_exported_symbol_source(
+        &self,
+        module_path: &Utf8Path,
+        symbol_name: &str,
+    ) -> Option<(Utf8PathBuf, JsOwnExport)> {
+        let data = self.data.pin();
+        let module = data.get(module_path)?.as_js_module_info()?;
+        let mut seen_paths = BTreeSet::new();
+        seen_paths.insert(module_path);
+
+        find_exported_symbol_with_paths(&data, module_path, module, symbol_name, &mut seen_paths)
+            .map(|(path, _, export)| (path.to_path_buf(), export.clone()))
+    }
+
     /// Finds an exported symbol by `symbol_name` as exported by `module`.
     ///
     /// Follows re-exports if necessary.
@@ -385,6 +403,68 @@ fn find_exported_symbol_with_seen_paths<'a>(
                 Ok(path) if seen_paths.insert(path) => data.get(path).and_then(|module| {
                     if let ModuleInfo::Js(module) = module {
                         find_exported_symbol_with_seen_paths(data, module, symbol_name, seen_paths)
+                    } else {
+                        None
+                    }
+                }),
+                _ => None,
+            }
+        }),
+    }
+}
+
+fn find_exported_symbol_with_paths<'a>(
+    data: &'a HashMapRef<Utf8PathBuf, ModuleInfo, FxBuildHasher, LocalGuard>,
+    module_path: &'a Utf8Path,
+    module: &'a JsModuleInfo,
+    symbol_name: &str,
+    seen_paths: &mut BTreeSet<&'a Utf8Path>,
+) -> Option<(&'a Utf8Path, &'a JsModuleInfo, &'a JsOwnExport)> {
+    match module.exports.get(symbol_name) {
+        Some(JsExport::Own(own_export) | JsExport::OwnType(own_export)) => {
+            Some((module_path, module, own_export))
+        }
+        Some(JsExport::Reexport(reexport) | JsExport::ReexportType(reexport)) => {
+            match &reexport.import.symbol {
+                ImportSymbol::All => None,
+                ImportSymbol::Named(source_name) => {
+                    let lookup = source_name.text();
+                    match reexport.import.resolved_path.as_deref() {
+                        Ok(path) if seen_paths.insert(path) => data.get(path).and_then(|module| {
+                            if let ModuleInfo::Js(module) = module {
+                                find_exported_symbol_with_paths(
+                                    data, path, module, lookup, seen_paths,
+                                )
+                            } else {
+                                None
+                            }
+                        }),
+                        _ => None,
+                    }
+                }
+                ImportSymbol::Default => match reexport.import.resolved_path.as_deref() {
+                    Ok(path) if seen_paths.insert(path) => data.get(path).and_then(|module| {
+                        if let ModuleInfo::Js(module) = module {
+                            find_exported_symbol_with_paths(
+                                data,
+                                path,
+                                module,
+                                symbol_name,
+                                seen_paths,
+                            )
+                        } else {
+                            None
+                        }
+                    }),
+                    _ => None,
+                },
+            }
+        }
+        None => module.blanket_reexports.iter().find_map(|reexport| {
+            match reexport.import.resolved_path.as_deref() {
+                Ok(path) if seen_paths.insert(path) => data.get(path).and_then(|module| {
+                    if let ModuleInfo::Js(module) = module {
+                        find_exported_symbol_with_paths(data, path, module, symbol_name, seen_paths)
                     } else {
                         None
                     }

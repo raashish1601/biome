@@ -14,7 +14,8 @@ use crate::utils::growth_guard::GrowthGuard;
 use crate::workspace::document::services::embedded_bindings::EmbeddedBuilder;
 use crate::workspace::{
     AnyEmbeddedSnippet, CodeAction, DocumentServices, FixAction, FixFileMode, FixFileResult,
-    GetSyntaxTreeResult, PullActionsResult, PullDiagnosticsAndActionsResult, RenameResult,
+    GetDefinitionResult, GetSyntaxTreeResult, PullActionsResult, PullDiagnosticsAndActionsResult,
+    RenameResult,
 };
 use biome_analyze::{
     ActionFilter, AnalyzerAction, AnalyzerDiagnostic, AnalyzerOptions, AnalyzerPluginVec,
@@ -1065,6 +1066,12 @@ type Lint = fn(LintParams) -> LintResults;
 type CodeActions = fn(CodeActionsParams) -> PullActionsResult;
 type FixAll = fn(FixAllParams) -> Result<FixFileResult, WorkspaceError>;
 type Rename = fn(&BiomePath, AnyParse, TextSize, String) -> Result<RenameResult, WorkspaceError>;
+type GetDefinition = fn(
+    &BiomePath,
+    AnyParse,
+    TextSize,
+    Arc<ModuleGraph>,
+) -> Result<Option<GetDefinitionResult>, WorkspaceError>;
 type UpdateSnippets = fn(AnyParse, Vec<UpdateSnippetsNodes>) -> Result<SendNode, WorkspaceError>;
 type PullDiagnosticsAndActions = fn(DiagnosticsAndActionsParams) -> PullDiagnosticsAndActionsResult;
 
@@ -1078,6 +1085,8 @@ pub struct AnalyzerCapabilities {
     pub(crate) fix_all: Option<FixAll>,
     /// It renames a binding inside a file
     pub(crate) rename: Option<Rename>,
+    /// It resolves the definition location for a symbol inside a file
+    pub(crate) get_definition: Option<GetDefinition>,
     /// It updates the snippets contained in the original root
     pub(crate) update_snippets: Option<UpdateSnippets>,
     /// Pulls diagnostics with relative code actions

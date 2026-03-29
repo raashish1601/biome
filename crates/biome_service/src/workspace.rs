@@ -1257,6 +1257,25 @@ pub struct RenameResult {
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
+pub struct GetDefinitionParams {
+    pub project_key: ProjectKey,
+    pub path: BiomePath,
+    pub symbol_at: TextSize,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct GetDefinitionResult {
+    /// Path of the file that contains the symbol definition
+    pub path: BiomePath,
+    /// Trimmed range of the definition inside the target file
+    pub range: TextRange,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct ScanProjectResult {
     /// Diagnostics reported while scanning the project.
     pub diagnostics: Vec<Diagnostic>,
@@ -1635,6 +1654,12 @@ pub trait Workspace: Send + Sync + RefUnwindSafe {
 
     /// Returns the content of the file after renaming a symbol.
     fn rename(&self, params: RenameParams) -> Result<RenameResult, WorkspaceError>;
+
+    /// Returns the definition location of the symbol under the cursor.
+    fn get_definition(
+        &self,
+        params: GetDefinitionParams,
+    ) -> Result<Option<GetDefinitionResult>, WorkspaceError>;
 
     /// Closes a file that is opened in the workspace.
     ///

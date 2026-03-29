@@ -21,16 +21,17 @@ use crate::workspace::{
     ChangeFileParams, ChangeFileResult, CheckFileSizeParams, CheckFileSizeResult, CloseFileParams,
     CloseProjectParams, CssDocumentServices, DropPatternParams, FeaturesBuilder, FileContent,
     FileExitsParams, FileFeaturesResult, FixFileParams, FixFileResult, FormatFileParams,
-    FormatOnTypeParams, FormatRangeParams, GetControlFlowGraphParams, GetFileContentParams,
-    GetFormatterIRParams, GetModuleGraphParams, GetModuleGraphResult, GetRegisteredTypesParams,
-    GetSemanticModelParams, GetSyntaxTreeParams, GetSyntaxTreeResult, GetTypeInfoParams,
-    IgnoreKind, OpenFileParams, OpenFileResult, OpenProjectParams, OpenProjectResult,
-    ParsePatternParams, ParsePatternResult, PathIsIgnoredParams, PatternId, PullActionsParams,
-    PullActionsResult, PullDiagnosticsAndActionsParams, PullDiagnosticsAndActionsResult,
-    PullDiagnosticsParams, PullDiagnosticsResult, RageEntry, RageParams, RageResult, RenameParams,
-    RenameResult, ScanKind, ScanProjectParams, ScanProjectResult, SearchPatternParams,
-    SearchResults, ServerInfo, ServiceNotification, Settings, SupportsFeatureParams,
-    UpdateModuleGraphParams, UpdateSettingsParams, UpdateSettingsResult,
+    FormatOnTypeParams, FormatRangeParams, GetControlFlowGraphParams, GetDefinitionParams,
+    GetDefinitionResult, GetFileContentParams, GetFormatterIRParams, GetModuleGraphParams,
+    GetModuleGraphResult, GetRegisteredTypesParams, GetSemanticModelParams, GetSyntaxTreeParams,
+    GetSyntaxTreeResult, GetTypeInfoParams, IgnoreKind, OpenFileParams, OpenFileResult,
+    OpenProjectParams, OpenProjectResult, ParsePatternParams, ParsePatternResult,
+    PathIsIgnoredParams, PatternId, PullActionsParams, PullActionsResult,
+    PullDiagnosticsAndActionsParams, PullDiagnosticsAndActionsResult, PullDiagnosticsParams,
+    PullDiagnosticsResult, RageEntry, RageParams, RageResult, RenameParams, RenameResult, ScanKind,
+    ScanProjectParams, ScanProjectResult, SearchPatternParams, SearchResults, ServerInfo,
+    ServiceNotification, Settings, SupportsFeatureParams, UpdateModuleGraphParams,
+    UpdateSettingsParams, UpdateSettingsResult,
 };
 use crate::{Workspace, WorkspaceError};
 use biome_analyze::{AnalyzerPluginVec, RuleCategory};
@@ -2352,6 +2353,32 @@ impl Workspace for WorkspaceServer {
         let result = rename(&params.path, parse, params.symbol_at, params.new_name)?;
 
         Ok(result)
+    }
+
+    fn get_definition(
+        &self,
+        params: GetDefinitionParams,
+    ) -> Result<Option<GetDefinitionResult>, WorkspaceError> {
+        let settings = self
+            .projects
+            .get_settings_based_on_path(params.project_key, &params.path)
+            .ok_or_else(WorkspaceError::no_project)?;
+        let capabilities = self.get_file_capabilities(
+            &params.path,
+            settings.experimental_full_html_support_enabled(),
+        );
+        let get_definition = capabilities
+            .analyzer
+            .get_definition
+            .ok_or_else(self.build_capability_error(&params.path))?;
+
+        let parse = self.get_parse(&params.path)?;
+        get_definition(
+            &params.path,
+            parse,
+            params.symbol_at,
+            self.module_graph.clone(),
+        )
     }
 
     /// Closes a file that is opened in the workspace.

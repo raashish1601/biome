@@ -298,6 +298,7 @@ impl ExtensionHandler for GraphqlFileHandler {
                 lint: Some(lint),
                 code_actions: Some(code_actions),
                 rename: None,
+                get_definition: None,
                 fix_all: Some(fix_all),
                 update_snippets: None,
                 pull_diagnostics_and_actions: None,

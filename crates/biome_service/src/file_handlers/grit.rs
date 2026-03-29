@@ -274,6 +274,7 @@ impl ExtensionHandler for GritFileHandler {
                 lint: Some(lint),
                 code_actions: None,
                 rename: None,
+                get_definition: None,
                 fix_all: Some(fix_all),
                 update_snippets: None,
                 pull_diagnostics_and_actions: None,
